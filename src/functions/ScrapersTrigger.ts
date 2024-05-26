@@ -1,87 +1,33 @@
 import { app, InvocationContext, Timer } from "@azure/functions";
-import axios from "axios";
+import { scrapeEvents, scrapeNews, saveData } from "../services/scraperService";
+import { ScraperSource } from "../types/enums";
+import { EventPayload, NewsPayload } from "../types/types";
 
 export async function ScrapersTrigger(
   myTimer: Timer,
   context: InvocationContext
 ): Promise<void> {
   try {
-    context.log("Start scrapers");
+    context.log("Starting scraping process...");
 
-    const eventsResponse = await axios.get(
-      "http://localhost:3001/scrape/events"
-    );
-    const eventsData = eventsResponse.data;
+    await Promise.allSettled([
+      scrapeAndSaveEvents(),
+      scrapeAndSaveNews(ScraperSource.MFI),
+      scrapeAndSaveNews(ScraperSource.INF),
+    ]);
 
-    await postDataToEndpoint(
-      eventsData,
-      "http://localhost:5202/kiosk-api/events"
-    );
-
-    const mfiResponse = await axios.get(
-      "http://localhost:3001/scrapers-kiosk-api/scrape/news/mfi"
-    );
-    const mfiData = mfiResponse.data;
-
-    await postDataToEndpoint(mfiData, "http://localhost:5202/kiosk-api/news");
-
-    const infResponse = await axios.get(
-      "http://localhost:3001/scrapers-kiosk-api/scrape/news/inf"
-    );
-    const infData = infResponse.data;
-
-    await postDataToEndpoint(infData, "http://localhost:5202/kiosk-api/news");
-
-    context.log("Scraping successful");
+    context.log("Scraping process completed successfully.");
   } catch (error) {
-    context.log("Error during scraping:", error);
+    context.log("Error occurred during scraping:", error);
   }
 }
 
-async function postDataToEndpoint(
-  data: any[],
-  endpoint: string
-): Promise<void> {
-  try {
-    for (const item of data) {
-      let payload;
-      if (endpoint.includes("events")) {
-        payload = {
-          eventDetails: {
-            name: item.name,
-            content: item.content,
-          },
-          url: item.url,
-          date: new Date().toISOString(),
-          language: "Pl",
-        };
-      } else if (endpoint.includes("news")) {
-        payload = {
-          leadingPhoto: item.leadingPhoto,
-          photos: item.photos,
-          link: item.link,
-          datetime: new Date().toISOString(),
-          newsDetails: {
-            title: item.title,
-            shortBody: item.shortBody,
-            body: item.body,
-          },
-          source: endpoint.includes("mfi") ? "MFI" : "INF",
-          category: "NEWS",
-          sourceLanguage: "Pl",
-        };
-      }
-
-      await axios.post(endpoint, payload);
-
-      console.log(`Posted data to ${endpoint}.`);
-    }
-  } catch (error) {
-    console.error(`Error posting data to ${endpoint}:`, error);
-  }
+async function scrapeAndSaveEvents(): Promise<void> {
+  const eventsData: EventPayload[] = await scrapeEvents();
+  await saveData<EventPayload>(eventsData, "Event");
 }
 
-app.timer("ScrapersTrigger", {
-  schedule: "0 0 0 * * *",
-  handler: ScrapersTrigger,
-});
+async function scrapeAndSaveNews(source: string): Promise<void> {
+  const newsData: NewsPayload[] = await scrapeNews(source);
+  await saveData<NewsPayload>(newsData, "News");
+}
